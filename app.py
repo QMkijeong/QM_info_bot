@@ -1,0 +1,156 @@
+# -*- coding: utf-8 -*-
+"""
+상품정보고시 카테고리 추천 챗봇 — Streamlit 프로토타입
+
+실행:
+    pip install streamlit google-generativeai pillow
+    export GOOGLE_API_KEY=<AI Studio에서 발급받은 키>
+    streamlit run app.py
+
+흐름:
+    이미지 업로드 -> [1단계] 이미지 품질 게이트 -> [2단계] 신호 추출(Gemini)
+    -> [3단계] 규칙 엔진 판정 (classifier.py) -> 애매하면 Y/N 질문 반복 -> 카테고리 확정
+"""
+
+import streamlit as st
+from PIL import Image
+
+import gemini_service
+from classifier import classify
+
+st.set_page_config(page_title="상품정보고시 카테고리 추천", page_icon="🏷️", layout="centered")
+
+for key, default in [
+    ("stage", "upload"),        # upload -> quality_checked -> extracted -> done
+    ("images", []),
+    ("quality", None),
+    ("signals", None),
+    ("answers", {}),
+    ("result", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+
+def reset_all():
+    for key, default in [
+        ("stage", "upload"), ("images", []), ("quality", None),
+        ("signals", None), ("answers", {}), ("result", None),
+    ]:
+        st.session_state[key] = default
+
+
+st.title("🏷️ 상품정보고시 카테고리 추천")
+st.caption("한글표시사항 이미지를 올리면 전자상거래 상품정보제공고시 40개 카테고리 중 알맞은 것을 추천합니다.")
+
+with st.sidebar:
+    st.markdown("### 진행 단계")
+    st.write(f"현재 단계: **{st.session_state.stage}**")
+    if st.button("처음부터 다시"):
+        reset_all()
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# 업로드
+# ---------------------------------------------------------------------------
+uploaded_files = st.file_uploader(
+    "한글표시사항 이미지 (앞면/뒷면 등 여러 장 가능)",
+    type=["png", "jpg", "jpeg"],
+    accept_multiple_files=True,
+)
+
+if uploaded_files and st.button("분석 시작", type="primary"):
+    st.session_state.images = [Image.open(f) for f in uploaded_files]
+    st.session_state.stage = "checking_quality"
+    st.session_state.quality = None
+    st.session_state.signals = None
+    st.session_state.answers = {}
+    st.session_state.result = None
+    st.rerun()
+
+if st.session_state.images:
+    st.image(st.session_state.images, width=160)
+
+# ---------------------------------------------------------------------------
+# 1단계: 품질 게이트
+# ---------------------------------------------------------------------------
+if st.session_state.stage == "checking_quality":
+    with st.spinner("이미지 판독 가능 여부를 확인하는 중..."):
+        try:
+            quality = gemini_service.assess_image_quality(st.session_state.images)
+        except Exception as e:
+            st.error(f"Gemini 호출 중 오류가 발생했습니다: {e}")
+            st.stop()
+    st.session_state.quality = quality
+
+    if quality.get("recommendation") == "request_reupload":
+        st.session_state.stage = "upload"
+        st.warning(
+            "⚠️ 이미지를 다시 받아야 할 것 같아요.\n\n"
+            f"**사유**: {quality.get('reupload_reason_ko', '표시사항이 선명하게 보이지 않습니다.')}"
+        )
+        if quality.get("unreadable_regions"):
+            st.caption("잘 안 읽힌 영역: " + ", ".join(quality["unreadable_regions"]))
+        st.info("다시 촬영한 이미지를 위에 업로드하고 '분석 시작'을 눌러주세요.")
+    else:
+        st.session_state.stage = "extracting"
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# 2단계: 신호 추출
+# ---------------------------------------------------------------------------
+if st.session_state.stage == "extracting":
+    with st.spinner("표시사항에서 정보를 추출하는 중..."):
+        try:
+            signals = gemini_service.extract_signals(st.session_state.images)
+        except Exception as e:
+            st.error(f"Gemini 호출 중 오류가 발생했습니다: {e}")
+            st.stop()
+    st.session_state.signals = signals
+    st.session_state.stage = "classifying"
+    st.rerun()
+
+# ---------------------------------------------------------------------------
+# 3단계: 규칙 엔진 판정 (+ 필요시 Y/N 질문)
+# ---------------------------------------------------------------------------
+if st.session_state.stage == "classifying":
+    result = classify(st.session_state.signals, st.session_state.answers)
+    st.session_state.result = result
+
+    if result.status == "needs_question":
+        st.subheader("🙋 확인이 필요해요")
+        st.write(result.question["text"])
+        choice = st.radio(
+            "선택", list(result.question["options"].keys()),
+            key=f"q_{result.question['key']}", label_visibility="collapsed",
+        )
+        if st.button("답변 제출"):
+            value = result.question["options"][choice]
+            if value != "unresolved":
+                st.session_state.answers[result.question["key"]] = value
+                st.rerun()
+            else:
+                st.error("담당 MD 또는 상품기획팀에 직접 문의가 필요한 케이스입니다.")
+                st.stop()
+    else:
+        st.session_state.stage = "done"
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# 완료
+# ---------------------------------------------------------------------------
+if st.session_state.stage == "done" and st.session_state.result:
+    cat = st.session_state.result.category
+    st.success(f"✅ 추천 카테고리: **({cat.legal_id}) {cat.name}**")
+
+    with st.expander("판정 근거 (감사 로그)"):
+        for line in st.session_state.result.trail:
+            st.write("- " + line)
+
+    with st.expander("Gemini 추출 원본 신호값 (검수용)"):
+        st.json(st.session_state.signals)
+
+    st.caption("이 추천이 실제와 다르면 하단 피드백으로 알려주세요 — 규칙표 보강에 사용됩니다.")
+    feedback = st.text_area("피드백 (선택)", placeholder="예: 이건 사실 위생용품인데 기타재화로 갔어야...")
+    if st.button("피드백 제출"):
+        st.info("피드백이 기록되었습니다. (프로토타입 단계: 실제 저장은 추후 로그 DB 연동 시 구현)")
