@@ -91,20 +91,31 @@ def classify(signals: dict, answers: dict = None) -> ClassificationResult:
 
     # ------------------------------------------------------------------
     # GROUP 2 — 식품 원물/가공
+    #   1순위 신호: 품목보고번호 유무 (있으면 가공식품, 원물엔 없음)
+    #   2순위 신호: 영양정보표시 유무 (있으면 가공식품 쪽 근거. 없다고 원물 확정은 안 함
+    #              — 영양정보표시 의무화가 2028년부터라 일부 가공식품엔 없을 수 있음)
+    #   둘 다 불명확하면 MD에게 직접 질문.
     # ------------------------------------------------------------------
     if signals.get("is_food_item") is True:
-        if _has(signals, "food_type_label"):
-            trail.append("[2군] 식품유형 표시 존재 → 가공식품 확정")
+        report_no = signals.get("food_item_report_number_present")
+        nutrition = signals.get("nutrition_label_present")
+
+        if report_no is True:
+            trail.append("[2군] 품목보고번호 존재 → 가공식품 확정")
             return _confirmed(_BY_ID["21"], trail)
-        if signals.get("food_type_label") is False:
-            trail.append("[2군] 식품유형 표시 없음(원물) → 농수축산물 확정")
+        if nutrition is True:
+            trail.append("[2군] 영양정보표시 존재(품목보고번호는 미확인) → 가공식품 확정")
+            return _confirmed(_BY_ID["21"], trail)
+        if report_no is False and nutrition is not True:
+            trail.append("[2군] 품목보고번호 없음 + 영양정보표시도 없음(단순처리 원물 추정) → 농수축산물 확정")
             return _confirmed(_BY_ID["20"], trail)
+
         key = "food_processed"
         if key in answers:
             cat_id = "21" if answers[key] == "processed_yes" else "20"
             trail.append(f"[2군] MD 확인({answers[key]}) → {_BY_ID[cat_id].name} 확정")
             return _confirmed(_BY_ID[cat_id], trail)
-        trail.append("[2군] 식품유형 표시 여부 불명확 → MD 확인 필요")
+        trail.append("[2군] 품목보고번호/영양정보표시 모두 불명확 → MD 확인 필요")
         q = DISAMBIGUATION_QUESTIONS["food_processed"]
         return _ask(key, q["question"], q["options"], trail)
 
