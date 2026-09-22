@@ -32,12 +32,32 @@ _GENERATION_CONFIG = {
 }
 
 
+def _get_api_key() -> str:
+    """
+    키 조회 우선순위:
+      1) Streamlit Cloud의 Secrets (st.secrets["GOOGLE_API_KEY"]) — 배포 환경 기본값
+      2) 로컬 환경변수 (GOOGLE_API_KEY) — 로컬 개발/테스트용
+    회사 공식 키 하나를 Streamlit Cloud Secrets에 등록해두면, MD는 아무 설정 없이
+    링크만 열어도 이 키로 동작한다.
+    """
+    try:
+        import streamlit as st
+        if "GOOGLE_API_KEY" in st.secrets:
+            return st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        pass  # Streamlit 밖(예: 단독 스크립트/테스트)에서 호출된 경우 무시하고 아래로
+
+    return os.environ.get("GOOGLE_API_KEY", "")
+
+
 def _get_model(response_schema: dict = None):
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = _get_api_key()
     if not api_key:
         raise RuntimeError(
-            "GOOGLE_API_KEY 환경변수가 설정되어 있지 않습니다. "
-            "AI Studio(https://aistudio.google.com/apikey)에서 키를 발급받아 설정하세요."
+            "GOOGLE_API_KEY 를 찾을 수 없습니다. "
+            "배포 환경(Streamlit Cloud)이면 App settings → Secrets 에 등록하고, "
+            "로컬이면 환경변수로 설정하세요. "
+            "(AI Studio: https://aistudio.google.com/apikey)"
         )
     genai.configure(api_key=api_key)
     cfg = dict(_GENERATION_CONFIG)
@@ -79,10 +99,16 @@ QUALITY_PROMPT = """\
 - 애초에 이게 "표시사항(글자가 인쇄된 라벨)" 사진이 맞는가? (제품 전체샷/포장 박스 겉면 사진만 있고
   표시사항 글자 영역이 안 보이면 not_a_label 로 판정)
 
-recommendation 은 overall_confidence 가 low 이거나 카테고리 판정에 필요한 핵심 문구
-(제품유형/성분/인증번호/사용연령 등)가 있을 영역이 안 읽히면 반드시 request_reupload 로 하세요.
-애매하면 안전한 쪽(request_reupload)을 선택하세요 — 잘못된 정보로 넘어가는 것보다
-한 번 더 재촬영을 요청하는 게 낫습니다.
+중요 — recommendation 판단 기준 (재촬영 요청은 최후의 수단입니다):
+- request_reupload 는 "이 사진 전체가 실질적으로 못 쓸 수준"일 때만 선택하세요.
+  예: 전체적으로 심하게 흐려서 글자를 거의 못 읽음 / 너무 어두워서 대부분 안 보임 /
+  표시사항이 아예 안 찍힘(not_a_label) / 핵심 영역 대부분이 잘려나감.
+- 반대로, 사진은 전반적으로 읽을 수 있는데 "특정 항목 한두 개"만 안 보이거나 흐린 경우
+  (예: 인증번호 숫자 일부만 흐림, 하단 한 줄만 잘림)는 request_reupload 하지 마세요.
+  proceed로 판정하고, unreadable_regions 에 그 항목만 적어주면 됩니다.
+  그 항목은 다음 단계에서 null로 처리되고, 필요하면 담당자에게 별도로 확인 질문이 뜨니
+  사진 전체를 다시 받을 필요가 없습니다.
+- 즉 "완벽하지 않다"와 "못 쓴다"를 구분하세요. 기준은 후자입니다.
 """
 
 
@@ -144,7 +170,30 @@ EXTRACTION_SCHEMA = {
         "functional_food_notice": {"type": "boolean", "description": "건강기능식품 기능정보 표시 문구 존재 여부"},
         "age_label": {"type": "string", "nullable": True, "description": "사용연령/권장사용연령 표시 원문"},
         "food_type_label": {"type": "boolean", "description": "'식품의 유형' 항목이 명시적으로 존재하는지"},
+        "food_type_text": {
+            "type": "string",
+            "nullable": True,
+            "description": "'식품의 유형' 항목에 적힌 원문 그대로 (예: '수산물', '축산물', '농산물', '기타 수산물가공품', '조미건어물' 등)",
+        },
         "is_food_item": {"type": "boolean", "description": "이 상품 자체가 식품(먹는 것)인지"},
+        "food_item_report_number_present": {
+            "type": "boolean",
+            "nullable": True,
+            "description": (
+                "'품목보고번호' 또는 '품목제조보고번호' 항목이 라벨에 존재하는지. "
+                "농수축산물(원물)에는 이 번호가 없고, 가공식품에는 있는 것이 원칙이라 "
+                "농수축산물/가공식품을 가르는 가장 확실한 신호다. 안 보이면 null."
+            ),
+        },
+        "nutrition_label_present": {
+            "type": "boolean",
+            "nullable": True,
+            "description": (
+                "'영양정보' 표시(나트륨/탄수화물/지방/단백질 등 표)가 라벨에 있는지. "
+                "가공식품에 주로 있고 농수축산물(원물)에는 없다. 단, 일부 가공식품은 "
+                "영양정보표시 의무화 이전 상품이라 없을 수도 있으니 보조 신호로만 쓸 것. 안 보이면 null."
+            ),
+        },
         "all_ingredients_listed": {
             "type": "boolean",
             "description": "'전성분' 표시(화장품법에 따라 기재·표시하여야 하는 모든 성분) 존재 여부. 이 문구는 화장품에만 등장하는 고유 표현이므로 정확히 판독할 것.",
@@ -178,6 +227,15 @@ group3_best_guess (품목 종류 판단)에 대해서만은 다른 규칙이 적
 - 단, 이 판단이 애매하거나 라벨 정보만으론 두 카테고리 중 어느 쪽인지 확신이 안 서면
   절대 임의로 찍지 말고 group3_confidence를 low로 낮추거나 '미상'을 선택하세요.
   틀린 확정보다 낮은 확신도로 사람에게 재확인받는 게 always 안전합니다.
+
+농수축산물(원물) vs 가공식품 판단 시 주의 (food_item_report_number_present, nutrition_label_present):
+- 껍질제거/절단/탈골/단순 냉동·건조/데침 같은 "단순 처리"만 거친 원물은 여전히 농수축산물입니다.
+  이런 단순처리 문구가 보인다고 해서 가공식품으로 오판하지 마세요.
+- 반대로, 조미/염장/훈제 같은 "첨가물 혼합"이나 분쇄·성형처럼 원형을 알아볼 수 없게 만드는
+  공정, 또는 자숙·레토르트 같은 본질적 가열이 있으면 가공식품입니다.
+- 가장 확실한 판별 신호는 라벨에 '품목보고번호'(또는 품목제조보고번호)가 있는지입니다.
+  있으면 가공식품, 원물에는 이 번호 자체가 없습니다. 영양정보표시 유무는 보조 신호로만
+  참고하세요 (일부 가공식품은 영양정보표시 의무화 이전 상품이라 없을 수 있습니다).
 """
 
 
