@@ -20,7 +20,7 @@ from PIL import Image
 
 from category_rules import GROUP3
 
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 # 3군(일반 재화) 후보 이름 목록 — Gemini가 이 목록 중에서만 고르도록 enum으로 강제한다.
 # "미상" 은 Gemini 스스로 확신이 없을 때 쓰는 탈출구 (지어내지 말라는 뜻).
