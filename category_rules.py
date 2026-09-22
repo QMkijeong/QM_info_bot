@@ -84,15 +84,25 @@ GROUP1 = [
 
 # ---------------------------------------------------------------------------
 # GROUP 2 — 식품 원물/가공 판정
+#   가장 확실한 신호는 '품목보고번호' 유무 (있으면 가공식품, 원물에는 없음).
+#   영양정보표시는 보조 신호 (가공식품 의무화가 2028년부터라 일부 가공식품엔 없을 수 있어
+#   "있으면 가공식품"으로만 쓰고 "없다고 원물"로 단정하지 않는다).
 # ---------------------------------------------------------------------------
 GROUP2 = [
     Category(
         legal_id="21", name="가공식품", group=2, priority=1,
-        match=lambda s: _has(s, "food_type_label"),
+        match=lambda s: (
+            s.get("food_item_report_number_present") is True
+            or s.get("nutrition_label_present") is True
+        ),
     ),
     Category(
         legal_id="20", name="농수축산물", group=2, priority=2,
-        match=lambda s: s.get("is_food_item") is True and not _has(s, "food_type_label"),
+        match=lambda s: (
+            s.get("is_food_item") is True
+            and s.get("food_item_report_number_present") is False
+            and s.get("nutrition_label_present") is not True
+        ),
     ),
 ]
 
@@ -164,8 +174,12 @@ DISAMBIGUATION_QUESTIONS = {
         "options": {"네": "child_yes", "아니오": "child_no"},
     },
     "food_processed": {
-        "question": "이 식품은 제조·가공 공정을 거쳤나요? (예: 조미, 가열, 혼합 등 / 아니오: 세척·선별만 거친 원물)",
-        "options": {"가공했습니다": "processed_yes", "원물 그대로입니다": "processed_no"},
+        "question": (
+            "이 상품, 라벨에 '품목보고번호'가 적혀 있나요? "
+            "(껍질제거·절단·단순냉동·데침 정도의 단순 손질만 된 원물은 보통 이 번호가 없고, "
+            "조미·염장·훈제·분쇄성형 등을 거친 가공식품엔 이 번호가 있습니다)"
+        ),
+        "options": {"있습니다(가공식품)": "processed_yes", "없습니다(원물 그대로)": "processed_no"},
     },
     "no_dedicated_category": {
         "question": "이 상품이 아래 예시 중 하나에 해당하나요? 맞으면 '기타재화' 서식으로 안내해드립니다.",
