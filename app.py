@@ -20,6 +20,32 @@ from classifier import classify
 
 st.set_page_config(page_title="상품정보고시 카테고리 추천", page_icon="🏷️", layout="centered")
 
+st.markdown(
+    """
+    <style>
+    :root { --brand: #5f0080; }
+
+    .brand-title{
+        font-size:26px; font-weight:700;
+        display:flex; align-items:baseline; gap:11px; flex-wrap:wrap;
+        margin-bottom: 0.25rem;
+    }
+    .brand-watermark{
+        display:inline-flex; align-items:center; position:relative; top:-3px;
+        font-family:'JetBrains Mono', ui-monospace, monospace;
+        font-size:10.5px; font-weight:600; letter-spacing:.24em; text-transform:uppercase;
+        color: var(--brand); opacity:.4;
+        padding:3.5px 10px 3.5px 9px; border:1px solid currentColor; border-radius:999px;
+        transform:rotate(-4deg); user-select:none; white-space:nowrap;
+        transition:opacity .18s ease, transform .18s ease;
+    }
+    .brand-watermark::before{ content:'✦'; margin-right:5px; font-size:7.5px; }
+    .brand-title:hover .brand-watermark{ opacity:.65; transform:rotate(-4deg) scale(1.03); }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 for key, default in [
     ("stage", "upload"),        # upload -> quality_checked -> extracted -> done
     ("images", []),
@@ -40,7 +66,15 @@ def reset_all():
         st.session_state[key] = default
 
 
-st.title("🏷️ 상품정보고시 카테고리 추천")
+st.markdown(
+    """
+    <div class="brand-title">
+        <span class="brand-title-main">🏷️ 상품정보고시 카테고리 추천</span>
+        <span class="brand-watermark">By QM</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 st.caption("한글표시사항 이미지를 올리면 전자상거래 상품정보제공고시 40개 카테고리 중 알맞은 것을 추천합니다.")
 
 with st.sidebar:
