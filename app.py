@@ -16,6 +16,7 @@ import streamlit as st
 from PIL import Image
 
 import gemini_service
+import logging_service
 from classifier import classify
 
 st.set_page_config(page_title="상품정보고시 카테고리 추천", page_icon="🏷️", layout="centered")
@@ -53,6 +54,8 @@ for key, default in [
     ("signals", None),
     ("answers", {}),
     ("result", None),
+    ("case_id", None),
+    ("logged", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -62,6 +65,7 @@ def reset_all():
     for key, default in [
         ("stage", "upload"), ("images", []), ("quality", None),
         ("signals", None), ("answers", {}), ("result", None),
+        ("case_id", None), ("logged", False),
     ]:
         st.session_state[key] = default
 
@@ -141,6 +145,7 @@ if st.session_state.stage == "extracting":
             st.error(f"Gemini 호출 중 오류가 발생했습니다: {e}")
             st.stop()
     st.session_state.signals = signals
+    st.session_state.case_id = logging_service.new_case_id()
     st.session_state.stage = "classifying"
     st.rerun()
 
@@ -184,7 +189,28 @@ if st.session_state.stage == "done" and st.session_state.result:
     with st.expander("Gemini 추출 원본 신호값 (검수용)"):
         st.json(st.session_state.signals)
 
+    # 판정이 확정될 때마다 케이스를 한 번만 자동으로 기록 (재실행돼도 중복 기록 방지)
+    if not st.session_state.logged:
+        logging_service.log_case(
+            case_id=st.session_state.case_id,
+            product_name=(st.session_state.signals or {}).get("product_name", ""),
+            category_id=cat.legal_id,
+            category_name=cat.name,
+            group3_confidence=(st.session_state.signals or {}).get("group3_confidence", ""),
+            trail=st.session_state.result.trail,
+            signals=st.session_state.signals or {},
+        )
+        st.session_state.logged = True
+
+    if not logging_service.logging_configured():
+        st.caption(
+            "⚠️ 케이스 자동 기록이 아직 설정되지 않았습니다 "
+            "(Secrets에 Google 스프레드시트 연동 정보가 없음). 지금은 이 결과가 어디에도 저장되지 않아요."
+        )
+
     st.caption("이 추천이 실제와 다르면 하단 피드백으로 알려주세요 — 규칙표 보강에 사용됩니다.")
     feedback = st.text_area("피드백 (선택)", placeholder="예: 이건 사실 위생용품인데 기타재화로 갔어야...")
     if st.button("피드백 제출"):
-        st.info("피드백이 기록되었습니다. (프로토타입 단계: 실제 저장은 추후 로그 DB 연동 시 구현)")
+        if feedback.strip():
+            logging_service.log_feedback(case_id=st.session_state.case_id, feedback_text=feedback.strip())
+        st.success("피드백이 기록되었습니다. 감사합니다!")
